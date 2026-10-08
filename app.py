@@ -2,9 +2,10 @@ import collections
 import tempfile
 import jieba
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import streamlit as st
-import stylecloud
+from wordcloud import WordCloud
 
 # 設定網頁版面
 st.set_page_config(
@@ -14,12 +15,11 @@ st.set_page_config(
 st.title("📚 通用型文本內容分析儀表板 (Mini-Voyant)")
 st.write(
     "支援**多筆同格式 CSV 檔案同時上傳**，系統將自動合併並鎖定**最後一個欄位**"
-    "進行繁體中文斷詞，即時產出造型文字雲與詞頻統計！"
+    "進行繁體中文斷詞，即時產出有機造型文字雲與詞頻統計！"
 )
 
 # 1. 側邊欄：檔案上傳與設定
 st.sidebar.header("1. 資料上傳與設定")
-# 允許同時上傳多個 CSV 檔案
 uploaded_files = st.sidebar.file_uploader(
     "上傳 CSV 語料檔案 (可多選)", type=["csv"], accept_multiple_files=True
 )
@@ -28,7 +28,7 @@ with st.sidebar.expander("📌 檔案格式與多檔上傳說明", expanded=Fals
   st.markdown("""
         - 檔案格式必須為 **CSV**（建議編碼：`UTF-8 with BOM`）。
         - 支援**同時上傳多個檔案**。
-        - **格式安全機制**：若上傳多個檔案，系統會自動檢查欄位是否完全一致。若有不同會直接跳出警告。
+        - **格式安全機制**：若上傳多個檔案，系統會自動檢查欄位是否完全一致。
         - **系統規則**：自動將 **「最後一個欄位」** 視為要分析的文本內容（Text Content）。
     """)
 
@@ -61,7 +61,6 @@ if uploaded_files:
   base_columns = None
   format_error = False
 
-  # 迴圈檢查每個上傳的檔案格式是否一致
   for file in uploaded_files:
     try:
       temp_df = pd.read_csv(file, encoding="utf-8-sig")
@@ -72,21 +71,18 @@ if uploaded_files:
     if base_columns is None:
       base_columns = temp_df.columns.tolist()
     else:
-      # 比對欄位是否相同
       if temp_df.columns.tolist() != base_columns:
         format_error = True
         break
     dfs.append(temp_df)
 
-  # 若格式不同，跳出警告並停止
   if format_error:
     st.error(
-        "⚠️ **格式不符警告**：您上傳的多個 CSV 檔案中，欄位結構（標題或數量）"
-        "存在差異！請整理成格式完全相同的 CSV 後再重新一起上傳。"
+        "⚠️ **格式不符警告**：您上傳的多個 CSV 檔案中，欄位結構存在差異！"
+        "請整理成格式完全相同的 CSV 後再重新一起上傳。"
     )
     st.stop()
 
-  # 合併所有上傳且格式正確的 DataFrame
   df = pd.concat(dfs, ignore_index=True)
 
   cols = df.columns.tolist()
@@ -118,7 +114,6 @@ if uploaded_files:
   if st.sidebar.button("🔄 重新分析", use_container_width=True):
     st.toast("已重新整理分析結果！", icon="🚀")
 
-  # 針對最後一欄進行斷詞
   corpus_text = " ".join(selected_subset[text_col].astype(str).tolist())
 
   if corpus_text.strip():
@@ -133,7 +128,6 @@ if uploaded_files:
         continue
       filtered_words.append(w_clean)
 
-    # 計算詞頻
     word_counts = collections.Counter(filtered_words)
     df_freq = pd.DataFrame(
         word_counts.most_common(50), columns=["詞彙", "出現頻次"]
@@ -149,27 +143,36 @@ if uploaded_files:
       st.dataframe(df_freq, height=500, use_container_width=True)
 
     with col2:
-      st.subheader("☁️ 造型文字雲視覺化 (StyleCloud)")
+      st.subheader("☁️ 有機造型文字雲視覺化")
       if len(word_counts) > 0:
         try:
-          # 使用暫存檔產生 stylecloud 圖片
-          with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-            temp_path = tmp.name
+          # 建立一個圓形的遮罩（Mask），讓文字呈現有機的圓形分佈
+          x, y = np.ogrid[:800, :800]
+          mask = (x - 400) ** 2 + (y - 400) ** 2 > 380** 2
+          mask = mask.astype(int) * 255
 
-          stylecloud.gen_stylecloud(
-              text_or_freq=word_counts,
-              font_path="C:/Windows/Fonts/msjh.ttc",  # 本地測試微軟正黑體
-              palette="matplotlib.Spectral",
+          font_path = "C:/Windows/Fonts/msjh.ttc"  # 本地測試字型
+          wc = WordCloud(
+              font_path=font_path,
+              width=800,
+              height=800,
               background_color="white",
-              output_name=temp_path,
-          )
-          st.image(temp_path, use_container_width=True)
+              mask=mask,  # 套用圓形遮罩
+              max_words=100,
+              colormap="Spectral",  # 豐富的彩虹漸層配色
+              contour_width=1,
+              contour_color="steelblue",
+          ).generate_from_frequencies(word_counts)
+
+          fig, ax = plt.subplots(figsize=(8, 8))
+          ax.imshow(wc, interpolation="bilinear")
+          ax.axis("off")
+          st.pyplot(fig)
         except Exception as e:
-          st.warning(f"StyleCloud 繪製提示：{e}")
+          st.warning(f"文字雲繪製提示：{e}")
       else:
         st.warning("沒有足夠詞彙產生文字雲。")
 
-    # 依照使用者設定的 Top N 呈現直式長條圖
     st.markdown("---")
     st.subheader(f"📈 前 {top_n} 大熱門詞彙分佈（長條圖）")
     if len(df_freq) > 0:
