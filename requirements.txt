@@ -3,3 +3,4 @@ jieba
 pandas
 wordcloud
 matplotlib
+stylecloud
