@@ -1,11 +1,8 @@
 import collections
-import tempfile
 import jieba
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 import streamlit as st
-from wordcloud import WordCloud
 
 # 設定網頁版面
 st.set_page_config(
@@ -15,7 +12,7 @@ st.set_page_config(
 st.title("📚 通用型文本內容分析儀表板 (Mini-Voyant)")
 st.write(
     "支援**多筆同格式 CSV 檔案同時上傳**，系統將自動合併並鎖定**最後一個欄位**"
-    "進行繁體中文斷詞，即時產出有機造型文字雲與詞頻統計！"
+    "進行繁體中文斷詞，即時產出詞頻排行榜與詞頻長條圖！"
 )
 
 # 1. 側邊欄：檔案上傳與設定
@@ -136,43 +133,11 @@ if uploaded_files:
     st.markdown(f"### 🎯 目前分析範圍：`{selected_group_name}`")
     st.markdown(f"共整合分析了 **{len(selected_subset)}** 筆文本資料。")
 
-    col1, col2 = st.columns(2)
+    # 完整呈現詞頻排行榜（全寬顯示，清晰易讀）
+    st.subheader("📊 詞頻排行榜 Top 50")
+    st.dataframe(df_freq, height=400, use_container_width=True)
 
-    with col1:
-      st.subheader("📊 詞頻排行榜 Top 50")
-      st.dataframe(df_freq, height=500, use_container_width=True)
-
-    with col2:
-      st.subheader("☁️ 有機造型文字雲視覺化")
-      if len(word_counts) > 0:
-        try:
-          # 建立一個圓形的遮罩（Mask），讓文字呈現有機的圓形分佈
-          x, y = np.ogrid[:800, :800]
-          mask = (x - 400) ** 2 + (y - 400) ** 2 > 380** 2
-          mask = mask.astype(int) * 255
-
-          font_path = "C:/Windows/Fonts/msjh.ttc"  # 本地測試字型
-          wc = WordCloud(
-              font_path=font_path,
-              width=800,
-              height=800,
-              background_color="white",
-              mask=mask,  # 套用圓形遮罩
-              max_words=100,
-              colormap="Spectral",  # 豐富的彩虹漸層配色
-              contour_width=1,
-              contour_color="steelblue",
-          ).generate_from_frequencies(word_counts)
-
-          fig, ax = plt.subplots(figsize=(8, 8))
-          ax.imshow(wc, interpolation="bilinear")
-          ax.axis("off")
-          st.pyplot(fig)
-        except Exception as e:
-          st.warning(f"文字雲繪製提示：{e}")
-      else:
-        st.warning("沒有足夠詞彙產生文字雲。")
-
+    # 呈現長條圖
     st.markdown("---")
     st.subheader(f"📈 前 {top_n} 大熱門詞彙分佈（長條圖）")
     if len(df_freq) > 0:
