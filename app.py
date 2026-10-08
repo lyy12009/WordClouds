@@ -1,9 +1,10 @@
 import collections
+import tempfile
 import jieba
 import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
-from wordcloud import WordCloud
+import stylecloud
 
 # 設定網頁版面
 st.set_page_config(
@@ -12,19 +13,23 @@ st.set_page_config(
 
 st.title("📚 通用型文本內容分析儀表板 (Mini-Voyant)")
 st.write(
-    "上傳任意結構的 CSV 語料檔案，系統將自動鎖定**最後一個欄位**進行繁體中文斷詞"
-    "，並即時產出文字雲與詞頻統計！"
+    "支援**多筆同格式 CSV 檔案同時上傳**，系統將自動合併並鎖定**最後一個欄位**"
+    "進行繁體中文斷詞，即時產出造型文字雲與詞頻統計！"
 )
 
 # 1. 側邊欄：檔案上傳與設定
 st.sidebar.header("1. 資料上傳與設定")
-uploaded_file = st.sidebar.file_uploader("上傳 CSV 語料檔案", type=["csv"])
+# 允許同時上傳多個 CSV 檔案
+uploaded_files = st.sidebar.file_uploader(
+    "上傳 CSV 語料檔案 (可多選)", type=["csv"], accept_multiple_files=True
+)
 
-with st.sidebar.expander("📌 檔案格式說明 (點此展開)", expanded=False):
+with st.sidebar.expander("📌 檔案格式與多檔上傳說明", expanded=False):
   st.markdown("""
         - 檔案格式必須為 **CSV**（建議編碼：`UTF-8 with BOM`）。
-        - 欄位數量不限。
-        - **系統規則**：會自動將 **「最後一個欄位」** 視為要分析的文本內容（Text Content）。
+        - 支援**同時上傳多個檔案**。
+        - **格式安全機制**：若上傳多個檔案，系統會自動檢查欄位是否完全一致。若有不同會直接跳出警告。
+        - **系統規則**：自動將 **「最後一個欄位」** 視為要分析的文本內容（Text Content）。
     """)
 
 st.sidebar.markdown("---")
@@ -43,24 +48,56 @@ stopwords_input = st.sidebar.text_area(
 )
 stopwords = set([w.strip() for w in stopwords_input.split(",") if w.strip()])
 
+# 長條圖顯示數量設定
+st.sidebar.markdown("---")
+st.sidebar.header("3. 圖表顯示設定")
+top_n = st.sidebar.slider(
+    "長條圖顯示詞彙數量 (Top N)", min_value=5, max_value=50, value=20
+)
+
 # 若有上傳檔案
-if uploaded_file is not None:
-  try:
-    df = pd.read_csv(uploaded_file, encoding="utf-8-sig")
-  except Exception as e:
-    st.sidebar.error(f"CSV 讀取錯誤（請確認編碼是否為 UTF-8）：{e}")
+if uploaded_files:
+  dfs = []
+  base_columns = None
+  format_error = False
+
+  # 迴圈檢查每個上傳的檔案格式是否一致
+  for file in uploaded_files:
+    try:
+      temp_df = pd.read_csv(file, encoding="utf-8-sig")
+    except Exception as e:
+      st.error(f"檔案 `{file.name}` 讀取錯誤：{e}")
+      st.stop()
+
+    if base_columns is None:
+      base_columns = temp_df.columns.tolist()
+    else:
+      # 比對欄位是否相同
+      if temp_df.columns.tolist() != base_columns:
+        format_error = True
+        break
+    dfs.append(temp_df)
+
+  # 若格式不同，跳出警告並停止
+  if format_error:
+    st.error(
+        "⚠️ **格式不符警告**：您上傳的多個 CSV 檔案中，欄位結構（標題或數量）"
+        "存在差異！請整理成格式完全相同的 CSV 後再重新一起上傳。"
+    )
     st.stop()
+
+  # 合併所有上傳且格式正確的 DataFrame
+  df = pd.concat(dfs, ignore_index=True)
 
   cols = df.columns.tolist()
-  if len(cols) < 1:
-    st.error("CSV 檔案沒有欄位！")
-    st.stop()
-
   text_col = cols[-1]
   meta_cols = cols[:-1]
 
   st.sidebar.markdown("---")
-  st.sidebar.info(f"🔍 **自動識別文本欄位**：`{text_col}`")
+  st.sidebar.info(
+      f"🔍 **已成功合併 {len(uploaded_files)} 個檔案**\n\n自動識別文本欄位："
+      f" `{text_col}`"
+  )
 
   selected_subset = df
   selected_group_name = "全部資料（綜合分析）"
@@ -103,7 +140,7 @@ if uploaded_file is not None:
     )
 
     st.markdown(f"### 🎯 目前分析範圍：`{selected_group_name}`")
-    st.markdown(f"共分析了 **{len(selected_subset)}** 筆文本資料。")
+    st.markdown(f"共整合分析了 **{len(selected_subset)}** 筆文本資料。")
 
     col1, col2 = st.columns(2)
 
@@ -112,32 +149,31 @@ if uploaded_file is not None:
       st.dataframe(df_freq, height=500, use_container_width=True)
 
     with col2:
-      st.subheader("☁️ 文字雲視覺化 (Word Cloud)")
+      st.subheader("☁️ 造型文字雲視覺化 (StyleCloud)")
       if len(word_counts) > 0:
         try:
-          font_path = "C:/Windows/Fonts/msjh.ttc"
-          wc = WordCloud(
-              font_path=font_path,
-              width=800,
-              height=600,
-              background_color="white",
-              max_words=100,
-          ).generate_from_frequencies(word_counts)
+          # 使用暫存檔產生 stylecloud 圖片
+          with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+            temp_path = tmp.name
 
-          fig, ax = plt.subplots(figsize=(8, 6))
-          ax.imshow(wc, interpolation="bilinear")
-          ax.axis("off")
-          st.pyplot(fig)
+          stylecloud.gen_stylecloud(
+              text_or_freq=word_counts,
+              font_path="C:/Windows/Fonts/msjh.ttc",  # 本地測試微軟正黑體
+              palette="matplotlib.Spectral",
+              background_color="white",
+              output_name=temp_path,
+          )
+          st.image(temp_path, use_container_width=True)
         except Exception as e:
-          st.warning(f"文字雲繪製提示：{e}")
+          st.warning(f"StyleCloud 繪製提示：{e}")
       else:
         st.warning("沒有足夠詞彙產生文字雲。")
 
-    # 保留乾淨的直式長條圖
+    # 依照使用者設定的 Top N 呈現直式長條圖
     st.markdown("---")
-    st.subheader("📈 前 20 大熱門詞彙分佈（長條圖）")
+    st.subheader(f"📈 前 {top_n} 大熱門詞彙分佈（長條圖）")
     if len(df_freq) > 0:
-      st.bar_chart(df_freq.set_index("詞彙")["出現頻次"].head(20))
+      st.bar_chart(df_freq.set_index("詞彙")["出現頻次"].head(top_n))
     else:
       st.info("尚無數據可繪製長條圖。")
 
@@ -145,4 +181,4 @@ if uploaded_file is not None:
     st.warning("選取的範圍內文字內容為空。")
 
 else:
-  st.info("👈 請從左側側邊欄上傳您的 CSV 語料檔案開始進行分析！")
+  st.info("👈 請從左側側邊欄上傳您的 CSV 語料檔案（支援多檔同格式）開始分析！")
