@@ -43,7 +43,7 @@ enable_stopwords = st.sidebar.checkbox("啟用功能詞（Stopwords）過濾", v
 stopwords_input = st.sidebar.text_area(
     "編輯停用詞清單 (以逗號分隔)", default_stopwords, height=120
 )
-stopwords = set([w.strip() for w in stopwords_input.split(",") if w.strip()])
+base_stopwords = set([w.strip() for w in stopwords_input.split(",") if w.strip()])
 
 # 長條圖顯示數量設定
 st.sidebar.markdown("---")
@@ -109,19 +109,31 @@ if uploaded_files:
   # 重新分析按鈕
   st.sidebar.markdown("---")
   if st.sidebar.button("🔄 重新分析", use_container_width=True):
+    # 清除暫存的動態刪除紀錄
+    if "temp_ignored_words" in st.session_state:
+      st.session_state.temp_ignored_words = set()
     st.toast("已重新整理分析結果！", icon="🚀")
+
+  # 初始化 Session State 用來記錄被手動打叉刪除的詞彙
+  if "temp_ignored_words" not in st.session_state:
+    st.session_state.temp_ignored_words = set()
 
   corpus_text = " ".join(selected_subset[text_col].astype(str).tolist())
 
   if corpus_text.strip():
     words = jieba.cut(corpus_text)
 
+    # 總停用詞 = 系統設定停用詞 + 使用者手動點擊刪除的詞彙
+    active_stopwords = base_stopwords.copy()
+    if enable_stopwords:
+      active_stopwords.update(st.session_state.temp_ignored_words)
+
     filtered_words = []
     for w in words:
       w_clean = w.strip()
       if not w_clean or len(w_clean) <= 1:
         continue
-      if enable_stopwords and w_clean in stopwords:
+      if w_clean in active_stopwords:
         continue
       filtered_words.append(w_clean)
 
@@ -133,13 +145,29 @@ if uploaded_files:
     st.markdown(f"### 🎯 目前分析範圍：`{selected_group_name}`")
     st.markdown(f"共整合分析了 **{len(selected_subset)}** 筆文本資料。")
 
-    # 完整呈現詞頻排行榜（全寬顯示，清晰易讀）
+    # 詞頻排行榜 Top 50
     st.subheader("📊 詞頻排行榜 Top 50")
-    st.dataframe(df_freq, height=400, use_container_width=True)
+    st.dataframe(df_freq, height=300, use_container_width=True)
 
-    # 呈現長條圖
+    # 互動式刪除區塊：列出目前長條圖即將顯示的前 Top N 詞彙，每個詞旁邊附上 ❌ 按鈕
     st.markdown("---")
-    st.subheader(f"📈 前 {top_n} 大熱門詞彙分佈（長條圖）")
+    st.subheader(f"🛠️ 圖表詞彙管理（點擊 ❌ 可即時排除特定詞彙並自動後補）")
+
+    current_top_words = df_freq["詞彙"].head(top_n).tolist()
+
+    if current_top_words:
+      # 用欄位排版顯示互動按鈕
+      cols_ui = st.columns(min(len(current_top_words), 10))
+      for idx, word in enumerate(current_top_words):
+        col_idx = idx % 10
+        with cols_ui[col_idx]:
+          if st.button(f"{word} ❌", key=f"del_{word}"):
+            st.session_state.temp_ignored_words.add(word)
+            st.rerun()
+
+    # 呈現長條圖（動態後補）
+    st.markdown("---")
+    st.subheader(f"📈 前 {top_n} 大熱門詞彙分佈（長條圖・動態後補）")
     if len(df_freq) > 0:
       st.bar_chart(df_freq.set_index("詞彙")["出現頻次"].head(top_n))
     else:
